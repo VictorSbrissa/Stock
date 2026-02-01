@@ -1,40 +1,51 @@
-﻿﻿using WebApplication1.Models;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
+using SeuProjeto.Models;
 using System.IO;
-
+using WebApplication1.Logic.Tenancy; // <-- Adicione o using para o ITenantService
+using WebApplication1.Models; // <-- Adicione o using para a Category
 
 namespace WebApplication1.Infrastructure
 {
+    // 1. CORREÇÃO DO SYSTEMCONTEXT
     public class SystemContext : DbContext
     {
-        public SystemContext(DbContextOptions<SystemContext> options) : base(options) { }
+        // Deixe apenas este construtor. Ele será usado tanto pelo runtime quanto pela factory.
+        public SystemContext(DbContextOptions<SystemContext> options, ITenantService tenantService)
+            : base(options)
+        {
+            // O tenantService é injetado aqui.
+            // Em tempo de execução, ele terá um valor.
+            // Em tempo de design (via factory), ele será null, mas não tem problema.
+        }
 
         public DbSet<Category> Category { get; set; }
-
+        public DbSet<Cliente> Clientes { get; set; }
+        public DbSet<Venda> Vendas { get; set; }
     }
 
-    public class DbContextFactory : IDesignTimeDbContextFactory<SystemContext>
+    // 2. FACTORY CORRIGIDA (sem código duplicado)
+    public class SystemContextFactory : IDesignTimeDbContextFactory<SystemContext>
     {
         public SystemContext CreateDbContext(string[] args)
         {
-            // Configuração para ler o appsettings.json
-            IConfigurationRoot configuration = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory()) // Pega o diretório atual do projeto
-                .AddJsonFile("appsettings.json") // Adiciona o appsettings.json
+            var configuration = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json")
                 .Build();
 
-            // Pega a string de conexão da seção "ConnectionStrings"
             var connectionString = configuration.GetConnectionString("DefaultConnection");
 
+            connectionString = connectionString.Replace("__TENANT_DB__", "design_time_db");
+
             var optionsBuilder = new DbContextOptionsBuilder<SystemContext>();
-            var serverVersion = new MySqlServerVersion(new Version(8, 0, 40)); // Ou a sua versão específica
+            optionsBuilder.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
 
-            optionsBuilder.UseMySql(connectionString, serverVersion);
-
-            return new SystemContext(optionsBuilder.Options);
+            // A ferramenta 'dotnet ef' é inteligente. Ela sabe como criar o SystemContext
+            // mesmo que o construtor peça por um ITenantService. Ela simplesmente passará 'null'
+            // para esse parâmetro, o que é suficiente para criar a migração.
+            return new SystemContext(optionsBuilder.Options, null); // Passando null para o tenantService
         }
     }
 }

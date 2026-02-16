@@ -5,10 +5,11 @@ using Microsoft.Extensions.Configuration;
 using WebApplication1.Infrastructure; 
 using WebApplication1.Management;
 using WebApplication1.Models;
+using Microsoft.AspNetCore.Authorization;
 
 [ApiController]
 [Route("api/[controller]")]
-// [Authorize(Roles = "Admin")] // <-- Adicione segurança aqui mais tarde!
+[Authorize(Roles = "Admin")]
 public class AdminController : ControllerBase
 {
     private readonly ManagementDbContext _managementDb;

@@ -6,15 +6,47 @@ using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
 using System;
 using WebApplication1.Management;
 using WebApplication1.Logic.Tenancy;
-
-// using statements no topo
 using WebApplication1.Infrastructure;
 using WebApplication1.Logic;
 using WebApplication1.Management; // Contexto de gerenciamento
 using WebApplication1.Logic.Tenancy; // Serviços de tenant
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using WebApplication1.Management.Models;
+using Microsoft.AspNetCore.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+// --- INÍCIO DA CONFIGURAÇÃO DE SEGURANÇA ---
+
+// 1. Adicionar o serviço de Autenticação
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true, // Garante que o token não expirou
+        ValidateIssuerSigningKey = true, // Valida a assinatura do token
+
+        ValidIssuer = builder.Configuration["Jwt:Issuer"],
+        ValidAudience = builder.Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+    };
+});
+
+// 2. Adicionar o serviço de Autorização (para usar [Authorize])
+builder.Services.AddAuthorization();
+
+// --- FIM DA CONFIGURAÇÃO DE SEGURANÇA ---
 
 // --- CONFIGURAÇÃO DOS SERVIÇOS ---
 
@@ -25,9 +57,21 @@ builder.Services.AddSwaggerGen();
 
 // 2. Registrar o banco de dados de GERENCIAMENTO (conexão fixa)
 var managementConnectionString = builder.Configuration.GetConnectionString("ManagementDbConnection");
+//builder.Services.AddDbContext<ManagementDbContext>(options =>
+//    options.UseMySql(managementConnectionString, ServerVersion.AutoDetect(managementConnectionString))
+//);
 builder.Services.AddDbContext<ManagementDbContext>(options =>
     options.UseMySql(managementConnectionString, ServerVersion.AutoDetect(managementConnectionString))
 );
+
+builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
+{
+    // Configurações de senha (exemplo)
+    options.Password.RequireDigit = true;
+    options.Password.RequiredLength = 8;
+    options.Password.RequireUppercase = true;
+})
+.AddEntityFrameworkStores<ManagementDbContext>(); // Liga o Identity ao nosso DbContext
 
 // 3. Registrar os serviços necessários para a lógica multi-tenant
 builder.Services.AddHttpContextAccessor(); // Essencial para o TenantService
@@ -61,7 +105,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseAuthorization();
+
+app.UseAuthentication(); // Verifica quem é o usuário (lê o token)
+app.UseAuthorization();  // Verifica se o usuário tem permissão para acessar o endpoint
+
 
 // ATENÇÃO: O TenantMiddleware precisa ser removido ou adaptado.
 // A lógica dele (identificar o tenant) agora está DENTRO do TenantService.

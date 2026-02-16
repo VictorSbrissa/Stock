@@ -3,15 +3,32 @@ using Microsoft.EntityFrameworkCore.Design;
 using WebApplication1.Management;
 using Microsoft.Extensions.Configuration;
 using System.IO;
+using WebApplication1.Management.Models;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 
 namespace WebApplication1.Management
 {
-    public class ManagementDbContext : DbContext
+    public class ManagementDbContext : IdentityDbContext<AppUser>
     {
         public ManagementDbContext(DbContextOptions<ManagementDbContext> options) : base(options) { }
 
+        // O DbSet<TenantInfo> será gerenciado aqui
         public DbSet<TenantInfo> Tenants { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder builder)
+        {
+            base.OnModelCreating(builder); // ESSENCIAL: Isso configura as tabelas do Identity
+
+            // Se você tiver configurações personalizadas para suas tabelas (como TenantInfo),
+            // elas podem vir aqui.
+        }
     }
+    //public class ManagementDbContext : DbContext
+    //{
+    //    public ManagementDbContext(DbContextOptions<ManagementDbContext> options) : base(options) { }
+
+    //    public DbSet<TenantInfo> Tenants { get; set; }
+    //}
 
     public class ManagementDbContextFactory : IDesignTimeDbContextFactory<ManagementDbContext>
     {

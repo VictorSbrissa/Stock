@@ -1,11 +1,12 @@
-﻿// Controllers/AdminController.cs
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using WebApplication1.Infrastructure; 
 using WebApplication1.Management;
 using WebApplication1.Models;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using WebApplication1.Management.Models;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -15,12 +16,14 @@ public class AdminController : ControllerBase
     private readonly ManagementDbContext _managementDb;
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
+    private readonly UserManager<AppUser> _userManager;
 
-    public AdminController(ManagementDbContext managementDb, IConfiguration configuration, IServiceProvider serviceProvider)
+    public AdminController(ManagementDbContext managementDb, IConfiguration configuration, IServiceProvider serviceProvider, UserManager<AppUser> userManager)
     {
         _managementDb = managementDb;
         _serviceProvider = serviceProvider;
         _configuration = configuration;
+        _userManager = userManager;
     }
 
     [HttpPost("migrate-all-tenants")]
@@ -118,5 +121,31 @@ public class AdminController : ControllerBase
         await _managementDb.SaveChangesAsync();
 
         return Ok(new { Message = $"Tenant '{tenantId}' provisionado com sucesso.", ConnectionString = newConnectionString });
+    }
+
+    [HttpPost("assign-role")]
+    public async Task<IActionResult> AssignRole([FromBody] AssignRoleRequest request)
+    {
+        // 1. Encontrar o usuário pelo nome
+        var user = await _userManager.FindByNameAsync(request.Username);
+        if (user == null)
+        {
+            return NotFound($"Usuário '{request.Username}' não encontrado.");
+        }
+
+        // 2. Verificar se a role que queremos atribuir realmente existe
+        // Usamos o RoleManager, então precisamos injetá-lo também. (Veja correção abaixo)
+        // Por simplicidade, vamos pular essa verificação por enquanto, pois nosso seeder já garante.
+
+        // 3. Atribuir a role ao usuário
+        var result = await _userManager.AddToRoleAsync(user, request.RoleName);
+
+        if (!result.Succeeded)
+        {
+            // Se falhar (ex: usuário já tem essa role), retorna os erros
+            return BadRequest(result.Errors);
+        }
+
+        return Ok($"Role '{request.RoleName}' atribuída com sucesso ao usuário '{request.Username}'.");
     }
 }

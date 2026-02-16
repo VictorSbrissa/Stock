@@ -1,32 +1,36 @@
-using WebApplication1.Infrastructure;
-using WebApplication1.Logic;
-using WebApplication1.Middlewares;
-using Microsoft.EntityFrameworkCore;
-using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
-using System;
-using WebApplication1.Management;
-using WebApplication1.Logic.Tenancy;
-using WebApplication1.Infrastructure;
-using WebApplication1.Logic;
-using WebApplication1.Management; // Contexto de gerenciamento
-using WebApplication1.Logic.Tenancy; // Serviços de tenant
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
-using System.Text;
-using WebApplication1.Management.Models;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
+using WebApplication1.Infrastructure;
+using WebApplication1.Logic;
+using WebApplication1.Logic.Tenancy;
+using WebApplication1.Management;
+using WebApplication1.Management.Models;
+
+// --- CONFIGURAÇÃO INICIAL ---
+
+// Desliga o mapeamento de claims padrão do JWT para usar os nomes originais (ex: "role")
+JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 1. Serviços de Segurança (Autenticação e Autorização)
+builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
+{
+    options.Password.RequireDigit = true;
+    options.Password.RequiredLength = 8;
+    options.Password.RequireUppercase = true;
+})
+.AddEntityFrameworkStores<ManagementDbContext>();
 
-// --- INÍCIO DA CONFIGURAÇÃO DE SEGURANÇA ---
-
-// 1. Adicionar o serviço de Autenticação
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
 })
 .AddJwtBearer(options =>
 {
@@ -34,70 +38,60 @@ builder.Services.AddAuthentication(options =>
     {
         ValidateIssuer = true,
         ValidateAudience = true,
-        ValidateLifetime = true, // Garante que o token não expirou
-        ValidateIssuerSigningKey = true, // Valida a assinatura do token
-
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 });
-
-// 2. Adicionar o serviço de Autorização (para usar [Authorize])
 builder.Services.AddAuthorization();
 
-// --- FIM DA CONFIGURAÇÃO DE SEGURANÇA ---
-
-// --- CONFIGURAÇÃO DOS SERVIÇOS ---
-
-// 1. Serviços padrão da API
+// 2. Serviços Padrão da API (Controllers, Swagger)
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// 2. Registrar o banco de dados de GERENCIAMENTO (conexão fixa)
+// 3. Serviços de Banco de Dados
 var managementConnectionString = builder.Configuration.GetConnectionString("ManagementDbConnection");
-//builder.Services.AddDbContext<ManagementDbContext>(options =>
-//    options.UseMySql(managementConnectionString, ServerVersion.AutoDetect(managementConnectionString))
-//);
 builder.Services.AddDbContext<ManagementDbContext>(options =>
     options.UseMySql(managementConnectionString, ServerVersion.AutoDetect(managementConnectionString))
 );
 
-builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
-{
-    // Configurações de senha (exemplo)
-    options.Password.RequireDigit = true;
-    options.Password.RequiredLength = 8;
-    options.Password.RequireUppercase = true;
-})
-.AddEntityFrameworkStores<ManagementDbContext>(); // Liga o Identity ao nosso DbContext
-
-// 3. Registrar os serviços necessários para a lógica multi-tenant
-builder.Services.AddHttpContextAccessor(); // Essencial para o TenantService
-builder.Services.AddScoped<ITenantService, TenantService>(); // Nosso serviço que encontra a conexão
-
-// 4. Registrar o DbContext do TENANT (conexão dinâmica) - ESTA É A ÚNICA VEZ QUE REGISTRAMOS O SystemContext
+// 4. Serviços de Multi-Tenancy
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddDbContext<SystemContext>((serviceProvider, options) =>
 {
-    // Pega o serviço de tenant para a requisição atual
     var tenantService = serviceProvider.GetRequiredService<ITenantService>();
-
-    // Pega a string de conexão específica do tenant
     var tenantConnectionString = tenantService.GetConnectionString();
-
-    // Configura o DbContext para usar essa string de conexão
     options.UseMySql(tenantConnectionString, ServerVersion.AutoDetect(tenantConnectionString));
 });
 
-// 5. Registrar outros serviços da sua aplicação
+// 5. Serviços de Lógica de Negócio
 builder.Services.AddScoped<CategoryLogic>();
-
 
 // --- CONFIGURAÇÃO DO PIPELINE HTTP ---
 
 var app = builder.Build();
 
+// Seeding de Dados Iniciais (Roles)
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
+        await WebApplication1.Management.Seed.RolesSeeder.SeedRolesAsync(roleManager);
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Ocorreu um erro durante o seeding das roles.");
+    }
+}
+
+// Middlewares do Pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -106,14 +100,8 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseAuthentication(); // Verifica quem é o usuário (lê o token)
-app.UseAuthorization();  // Verifica se o usuário tem permissão para acessar o endpoint
-
-
-// ATENÇÃO: O TenantMiddleware precisa ser removido ou adaptado.
-// A lógica dele (identificar o tenant) agora está DENTRO do TenantService.
-// Se você mantiver o middleware, ele precisa ser muito simples ou pode causar conflitos.
-// app.UseMiddleware<TenantMiddleware>(); // <-- RECOMENDO REMOVER POR ENQUANTO
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 
